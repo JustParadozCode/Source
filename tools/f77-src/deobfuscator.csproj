@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>deobfuscator</AssemblyName>
+    <RootNamespace>deobfuscator</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Loretta.CodeAnalysis.Common" Version="0.2.12" />
+    <PackageReference Include="Loretta.CodeAnalysis.Lua" Version="0.2.12" />
+    <PackageReference Include="Loretta.CodeAnalysis.Lua.Experimental" Version="0.2.12" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="4.6.0-preview.18571.3" />
+  </ItemGroup>
+
+</Project>
