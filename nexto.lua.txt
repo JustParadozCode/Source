@@ -3,6 +3,14 @@
 -- Free, non-commercial adaptation. Keep attribution and share adaptations alike.
 -- Upstream: https://gitlab.com/azulacs/catware-blox-league
 local LOADER_URL="https://vantabot-license.brahlamapringles.workers.dev/free/nexto.lua"
+local GAME_PROFILES={
+ [110443603443743]={key="blox",name="Blox League"},
+ [118675786171302]={key="blox",name="Blox League"},
+ [101880234193261]={key="turbo",name="Turbo Soccer"},
+}
+local PROFILE=GAME_PROFILES[game.PlaceId]
+assert(PROFILE,"Vanta Nexto supports Blox League and Turbo Soccer only (place "..tostring(game.PlaceId)..")")
+local GAME=PROFILE.key
 local Players=game:GetService("Players")
 local RunService=game:GetService("RunService")
 local UserInput=game:GetService("UserInputService")
@@ -60,7 +68,7 @@ local quickToggle=button(sidebar,"Bot OFF",0,170,1,44);quickToggle.BackgroundCol
 label(pages.Bots,"Bots",0,0,.96,32,23)
 local card=make("Frame",pages.Bots,{Position=UDim2.fromOffset(0,48),Size=UDim2.new(.96,0,0,142),BackgroundColor3=palette.surface,BorderSizePixel=0});rounded(card,12)
 label(card,"Nexto",16,12,.8,32,24)
-label(card,"Blox League · 1v1 / 2v2 / 3v3",16,48,.9,28,13,palette.muted)
+label(card,PROFILE.name.." · 1v1 / 2v2 / 3v3",16,48,.9,28,13,palette.muted)
 label(card,"Free neural bot. Original Nexto kickoff and controls.",16,83,.88,45,13,palette.muted)
 local enable=button(pages.Bots,"Loading model…",0,212,.96,44);enable.BackgroundColor3=palette.red
 label(pages.Settings,"Settings",0,0,.96,32,23)
@@ -146,7 +154,7 @@ track(LP.OnTeleport:Connect(function(phase)
 end))
 local function waitChild(parent,name)
  assert(not state.unloaded,"Loader closed")
- return assert(parent:WaitForChild(name,30),"Waiting for Blox League: missing "..name)
+ return assert(parent:WaitForChild(name,30),"Waiting for "..PROFILE.name..": missing "..name)
 end
 local function decodeBase64(encoded)
  local alphabet={};local chars="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -167,14 +175,129 @@ end
 task.spawn(function()
  local uiConnectionCount=#state.connections
  local ok,problem=pcall(function()
+
   local Shared=waitChild(RS,"Shared")
-  local Client=waitChild(waitChild(LP,"PlayerScripts"),"Client")
-  local Sim=waitChild(Shared,"Sim")
-  local Arena=require(waitChild(Sim,"Arena"))
-  local Prediction=require(waitChild(waitChild(Shared,"Net"),"Prediction"))
-  local Input=require(waitChild(Client,"Input"))
-  local Coords=require(waitChild(Client,"Coords"))
-  assert(type(Prediction.Step)=="function"and type(Input.Read)=="function","Blox League interfaces changed")
+  local Arena,Prediction,Input,Coords,Sim,adapter
+  if GAME=="turbo" then
+   local Client=RS:FindFirstChild("Client") or waitChild(waitChild(LP,"PlayerScripts"),"Client")
+   local Turbo=(function()
+local Turbo={}
+function Turbo.new(Shared,Client,waitChild,cleanup,loadModule)
+ local require=loadModule or require
+ local Sim=waitChild(Shared,"Sim")
+ local Prediction=require(waitChild(waitChild(Shared,"Net"),"Prediction"))
+ local Match=require(waitChild(Sim,"Match"))
+ local Const=require(waitChild(Sim,"Const"))
+ local Input=require(waitChild(Client,"Input"))
+ assert(type(Prediction.step)=="function" and type(Prediction._remember)=="function","Turbo Soccer prediction interface unavailable")
+ assert(type(Input.read)=="function" and type(Match.new)=="function","Turbo Soccer control interface unavailable")
+ local self={prediction=nil,allowed=false,phase=nil,lastTick=nil,objects={},lastPredict=-math.huge,path={}}
+ local proxy={arena={cars={},boostPads={}},tick=0}
+ self.proxy=proxy
+ function proxy:LocalCar()return self.own end
+ local function stateObject(id,team,st)
+  return {id=id,team=team,GetState=function()return st end}
+ end
+ local function isVector(v)return typeof(v)=="vector" or typeof(v)=="Vector3" end
+ function self:refresh(p)
+  local match=p and p.match
+  local index=p and p.localIndex
+  if not match or type(index)~="number" or not match.cars or not match.cars[index] then proxy.own=nil;return nil end
+  local frame=p.prints and p.prints[match.tick]
+  if not frame or #frame~=#match.cars*7+8 or not isVector(frame[6]) then proxy.own=nil;return nil end
+  local cars={}
+  for i,record in match.cars do
+   local at=9+(i-1)*7
+   local bits=frame[at+6]
+   if (record.team~=0 and record.team~=1) or type(bits)~="number" or not isVector(frame[at]) or not isVector(frame[at+3]) or not isVector(frame[at+4]) then proxy.own=nil;return nil end
+   local st={pos=frame[at],vel=frame[at+1],angVel=frame[at+2],rot={forward=frame[at+3],up=frame[at+4]},boost=frame[at+5],
+    isOnGround=bit32.band(bits,1)~=0,hasJumped=bit32.band(bits,2)~=0,hasDoubleJumped=bit32.band(bits,4)~=0,
+    hasFlipped=bit32.band(bits,8)~=0,isDemoed=bit32.band(bits,2048)~=0}
+   local object=self.objects[i]
+   if not object or object.source~=record then object=stateObject(i,record.team,st);object.source=record;self.objects[i]=object end
+   object.team=record.team;object.GetState=function()return st end
+   cars[i]=object
+  end
+  local ball={pos=frame[6],vel=frame[7],angVel=frame[8]}
+  local pads={};local positions={}
+  for _,pos in Const.PADS_BIG do table.insert(positions,pos)end
+  for _,pos in Const.PADS_SMALL do table.insert(positions,pos)end
+  for i,pad in match.pads.pads do
+   assert(positions[i],"Turbo Soccer boost layout changed")
+   pads[i]={pos=positions[i],isActive=pad.isActive==true}
+  end
+  proxy.tick=match.tick;proxy.own=cars[index];proxy.arena.cars=cars;proxy.arena.boostPads=pads
+  proxy.arena.ball={GetState=function()return ball end}
+  local fresh=self.prediction~=p or self.match~=match or self.index~=index or (self.lastTick and match.tick<self.lastTick) or (frame[1]=="countdown" and self.phase~="countdown")
+  self.prediction=p;self.match=match;self.index=index;self.lastTick=match.tick;self.phase=frame[1]
+  return proxy.own,fresh
+ end
+ function self:install(drive,reset,enabled,onError)
+  local originalStep,originalRead=Prediction.step,Input.read
+  local readWrapper,stepWrapper
+  readWrapper=function(controls,camera,allowed,...)
+   self.allowed=allowed==true
+   return originalRead(controls,camera,allowed,...)
+  end
+  stepWrapper=function(p,controls,...)
+   local ok,problem=pcall(function()
+    local car,fresh=self:refresh(p)
+    if fresh then reset()end
+    if car and enabled() and self.allowed and self.phase=="play" and type(controls)=="table" and not car:GetState().isDemoed then drive(controls,car,car:GetState())end
+   end)
+   if not ok then proxy.own=nil;reset();onError(problem)end
+   return originalStep(p,controls,...)
+  end
+  Prediction.step=stepWrapper;Input.read=readWrapper
+  table.insert(cleanup,function()
+   if Prediction.step==stepWrapper then Prediction.step=originalStep end
+   if Input.read==readWrapper then Input.read=originalRead end
+   self.prediction=nil;proxy.own=nil
+  end)
+ end
+ function self:predict(seconds)
+  local p=self.prediction
+  if not p or not proxy.own then return {}end
+  if os.clock()-self.lastPredict<.10 and self.pathTick==proxy.tick then return self.path end
+  if os.clock()-self.lastPredict<.10 and self.pathSource==p then return self.path end
+  self.lastPredict=os.clock();self.pathTick=proxy.tick;self.pathSource=p
+  local match=p.match
+  if not self.scratch or self.config~=match.config then self.scratch=Match.new(table.clone(match.config));self.config=match.config end
+  local scratch=self.scratch
+  scratch:apply(match:capture())
+  -- Only advance a private ball-only simulation, never the live match.
+  scratch.cars={};scratch.phase="play";scratch.phaseTicks=0
+  local simulation=Prediction.new(scratch,nil)
+  local path={}
+  for tick=1,math.floor(seconds*120)do
+   simulation:step(nil)
+   local frame=simulation.prints[scratch.tick]
+   if tick%4==0 and frame and isVector(frame[6]) then table.insert(path,{pos=frame[6],t=tick/120})end
+   if scratch.phase~="play" then break end
+  end
+  -- Match.apply expects its original car slots on the next refresh.
+  self.scratch=nil
+  self.path=path;return path
+ end
+ self.Coords={}
+ -- Turbo's simulation is x/y horizontal and z vertical, at 0.1 studs per unit.
+ self.Coords.Pos=function(point)return Vector3.new(point.x*.1,point.z*.1,point.y*.1)end
+ return self
+end
+return Turbo
+
+   end)()
+   adapter=Turbo.new(Shared,Client,waitChild,state.cleanup)
+   Coords=adapter.Coords
+  else
+   local Client=waitChild(waitChild(LP,"PlayerScripts"),"Client")
+   Sim=waitChild(Shared,"Sim")
+   Arena=require(waitChild(Sim,"Arena"))
+   Prediction=require(waitChild(waitChild(Shared,"Net"),"Prediction"))
+   Input=require(waitChild(Client,"Input"))
+   Coords=require(waitChild(Client,"Coords"))
+   assert(type(Prediction.Step)=="function"and type(Input.Read)=="function","Blox League interfaces changed")
+  end
   assert(not state.unloaded,"Loader closed")
   local nativeDecode=type(crypt)=="table"and crypt.base64decode
   local crypt={base64decode=function(encoded)
@@ -479,17 +602,20 @@ data="zJg9PNntJrwxgw23aea7PIiZqbwDIQ48vU/cOjM907wBSsw8AtJBvDQO3jwRvps8p6X8PDzUtL
   local NX=Nexto.load(weights)
   weights=nil
   assert(not state.unloaded,"Loader closed")
-  local P
-  if type(getgc)=="function"then
-   for _,candidate in getgc(true)do if type(candidate)=="table"and rawget(candidate,"shadow")and rawget(candidate,"carsById")then P=candidate;break end end
+
+  local P=adapter and adapter.proxy or nil
+  local origRead
+  if not adapter then
+   if type(getgc)=="function"then
+    for _,candidate in getgc(true)do if type(candidate)=="table"and rawget(candidate,"shadow")and rawget(candidate,"carsById")then P=candidate;break end end
+   end
+   local origStep=Prediction.Step
+   origRead=Input.Read
+   local stepWrapper
+   stepWrapper=function(self,...)P=self;return origStep(self,...)end
+   Prediction.Step=stepWrapper
+   table.insert(state.cleanup,function()if Prediction.Step==stepWrapper then Prediction.Step=origStep end end)
   end
-  local origStep,origRead=Prediction.Step,Input.Read
-  local stepWrapper
-  stepWrapper=function(self,...)P=self;return origStep(self,...)end
-  Prediction.Step=stepWrapper
-  table.insert(state.cleanup,function()if Prediction.Step==stepWrapper then Prediction.Step=origStep end end)
-  local function localCar()return P and P.tick and P:LocalCar()end
-  local UU_PER_BT=1/require(Sim.Consts).UU_TO_BT
 local TICK = 1 / 120
 local path = {} -- predicted ball {pos, t} every PATH_STRIDE ticks
 local PATH_STRIDE = 4
@@ -499,8 +625,9 @@ local function localCar()
 	return P and P.tick and P:LocalCar()
 end
 
-local UU_PER_BT = 1 / require(Sim.Consts).UU_TO_BT
+local UU_PER_BT = not adapter and 1 / require(Sim.Consts).UU_TO_BT or 1
 local function predictBall(seconds) -- ponytail: re-sims from scratch every frame (~1ms/s of flight); cache if it ever shows in profiles
+	if adapter then path=adapter:predict(seconds);return end
 	table.clear(path)
 	if not (P and P.tick) then return end
 	local muts = P.arena.mutators
@@ -609,8 +736,17 @@ end
    end
    return controls
   end
-  Input.Read=readWrapper
-  table.insert(state.cleanup,function()if Input.Read==readWrapper then Input.Read=origRead end;ENV.VantaNextoStats=nil end)
+
+  if adapter then
+   adapter:install(nextoControls,resetBot,function()return state.enabled and not state.unloaded end,function(problem)
+    state.enabled=false;settings.enabled=false;save();updateUI();log("Turbo Soccer: "..tostring(problem))
+   end)
+  else
+   Input.Read=readWrapper
+   table.insert(state.cleanup,function()if Input.Read==readWrapper then Input.Read=origRead end end)
+  end
+  table.insert(state.cleanup,function()ENV.VantaNextoStats=nil end)
+
 
   local lines={}
   local visualGui=make("ScreenGui",playerGui,{Name="VantaNextoPrediction",IgnoreGuiInset=true,ResetOnSpawn=false,DisplayOrder=8000})
@@ -688,7 +824,7 @@ end
   track(RunService.Heartbeat:Connect(function(dt)
    elapsed+=dt;if elapsed<.5 or state.unloaded then return end;elapsed=0
    local car=localCar()
-   if not car then status.Text="Waiting for your Blox League car"
+   if not car then status.Text="Waiting for your "..PROFILE.name.." car"
    elseif state.enabled then status.Text=string.format("Nexto ON · %.1f ms compute/decision",nx.ms)
    else status.Text="Nexto ready · OFF"end
   end))
